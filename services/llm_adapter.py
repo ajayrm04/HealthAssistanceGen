@@ -25,7 +25,7 @@ class LLMAdapter:
         self.max_tokens = max_tokens or llm_conf.get("max_tokens", 512)
         # instantiate provider-specific chat model
         if PROVIDER == "openai":
-            api_key=""
+            # insert api key here 
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY required for OpenAI provider")
             # langchain_openai.ChatOpenAI accepts api_key and model
