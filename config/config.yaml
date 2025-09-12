@@ -1,0 +1,67 @@
+# config.yaml - edit values for your environment
+neo4j:
+  uri: "neo4j://localhost:7687"
+  user: "neo4j"
+  password: "app-1234"
+
+faiss:
+  dim: 384
+  general_index: "data/faiss_general.index"
+  nursing_index: "data/faiss_nursing.index"
+  research_index: "data/faiss_research.index"
+  top_k : 3
+  embedding_model: "pritamdeka/S-PubMedBert-MS-MARCO"  # change to the HF/SentenceTransformer you prefer
+
+mcp:
+  max_tokens: 1600
+  max_items: 16
+  prefer_kg_score_boost: 1.2
+
+a2a:
+  enabled: true
+  transport: "local"   # local or http
+  http_endpoint: "http://localhost:8085/a2a"
+
+orchestration:
+  sufficiency_threshold: 0.6
+
+llm:
+  provider: "openai"                      # "ollama" or "openai"
+  model_name: "gpt-4o"         # name available to your Ollama server
+  temperature: 0.2
+  max_tokens: 128
+  router_model_name: "gpt-4o"
+  max_vdb_chunks: 6
+  vdb_chunks : 4
+  vdb_chunk_overlap: 2
+  nurse_model_key: "gpt-4o"
+  doctor_model_key: "gpt-4o"
+  researcher_model_key: "gpt-4o"
+  reasoner_model_key: "gpt-4o"
+  
+
+streamlit:
+  title: "Healthcare Assistant (RAG + MCP)"
+
+app:
+  conversation_db: "data/conversations.sqlite"
+  ui_title: "Healthcare Multi-Agent Assistant"
+
+compliance:
+  disallowed_terms:
+    - "HIV status"
+    - "genetic data"
+    - "substance abuse"
+  audit_log: "logs/compliance_audit.log"
+slots:
+  required:
+    - symptom
+    - duration
+    - severity
+    - medical_history
+    - medications
+    - allergies
+  optional:
+    - lifestyle
+    - recent_travel
+    - family_history

@@ -1,0 +1,11 @@
+streamlit
+pyyaml
+numpy
+faiss-cpu
+sentence-transformers
+neo4j
+langchain-ollama
+langchain-openai
+langgraph
+tiktoken
+httpx
