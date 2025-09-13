@@ -8,7 +8,6 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 config_path = os.path.join(base_dir, "..","config", "config.yaml")
 cfg = yaml.safe_load(open(config_path,"r",encoding="utf-8"))
 PROVIDER = cfg["llm"]["provider"].lower()
-OPENAI_API_KEY="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"
 
 
 # Import provider adapters lazily
