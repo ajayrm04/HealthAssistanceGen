@@ -144,40 +144,45 @@ class SlotExtractor:
 
     async def extract_slots(self, text: str) -> Dict[str, Any]:
         """
-        Robust hybrid extraction:
-          1) Fast rule-based heuristics
-          2) LLM JSON extraction to fill remaining gaps
+        LLM-only extraction: ask the model to return a strict JSON object with
+        the required keys. If the model output cannot be parsed, return all keys with null.
         """
-        # 1) Rule pass
-        rule_out = _rule_extract(text)
-
-        # If rule-based filled most fields, we can skip LLM to save latency
-        remaining = [k for k in REQUIRED_SLOTS if not rule_out.get(k)]
-        if not remaining:
-            return {k: rule_out.get(k) for k in REQUIRED_SLOTS}
-
-        # 2) LLM pass (only if there are gaps)
-        system = "You are a slot extractor. Return ONLY a JSON object with the requested keys."
-        user = (
-            f"Text: \"{text}\"\n"
-            f"Return JSON with keys: {REQUIRED_SLOTS}. Example: {{ \"symptom\": \"headache\", \"duration\": \"2 days\", ... }}\n"
-            f"If unknown, use null."
+        system = (
+            "You are a strict JSON slot extractor. Return ONLY a valid JSON object with exactly "
+            f"these keys: {REQUIRED_SLOTS}. Values should be strings or null if unknown. No extra text."
         )
-        llm_json = {}
+        user = (
+            "Extract the following patient information from the text.\n" \
+            f"Text: \"{text}\"\n" \
+            "Example valid response: {\n"
+            "  \"symptom\": \"cough\",\n"
+            "  \"duration\": \"3 days\",\n"
+            "  \"severity\": null,\n"
+            "  \"medical_history\": null,\n"
+            "  \"medications\": null,\n"
+            "  \"allergies\": null\n"
+            "}"
+        )
+
         try:
             resp = await self.llm.simple(system, user)
-            data = json.loads(str(resp))
-            llm_json = {k: data.get(k, None) for k in REQUIRED_SLOTS}
+            text_resp = str(resp).strip()
+            # Best-effort JSON extraction if model adds surrounding text
+            start = text_resp.find("{")
+            end = text_resp.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                text_resp = text_resp[start:end+1]
+            data = json.loads(text_resp)
+            return {k: data.get(k, None) for k in REQUIRED_SLOTS}
         except Exception:
+            # As a last resort, try eval in a constrained way
             try:
-                data = eval(str(resp))  # last-resort
-                llm_json = {k: data.get(k, None) for k in REQUIRED_SLOTS}
+                data = eval(text_resp)
+                if isinstance(data, dict):
+                    return {k: data.get(k, None) for k in REQUIRED_SLOTS}
             except Exception:
-                llm_json = {k: None for k in REQUIRED_SLOTS}
-
-        # Merge: prefer rule-based if present, otherwise LLM
-        merged = {k: (rule_out.get(k) or llm_json.get(k)) for k in REQUIRED_SLOTS}
-        return merged
+                pass
+        return {k: None for k in REQUIRED_SLOTS}
 
     async def next_question(self, collected: Dict[str, Any], context: Optional[str] = "") -> str:
         """

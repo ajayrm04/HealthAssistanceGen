@@ -124,6 +124,60 @@ class Orchestrator:
             "slots": state.slots
         })
         updated = state.messages + [AIMessage(content=f"[nurse] {resp.get('text', resp)}")]
+
+        # Run KG lookup using current symptoms and attach as a structured message for downstream use
+        try:
+            import json
+            slots = resp.get("slots", state.slots) or {}
+            symptom_query = (slots.get("symptom") or "").strip()
+            kg_triples = []
+            if symptom_query:
+                # Support multiple comma-separated symptoms
+                symptoms = [s.strip() for s in str(symptom_query).split(",") if s.strip()]
+                if not symptoms:
+                    symptoms = [symptom_query]
+                
+                if len(symptoms) > 1:
+                    # Use the new method for multiple symptoms - find diseases with ALL symptoms
+                    try:
+                        kg_triples = self.kg.retrieve_diseases_with_all_symptoms(symptoms) or []
+                        print(f"[nurse_node] Using multi-symptom search for: {symptoms}")
+                    except Exception as e:
+                        print(f"[nurse_node] Multi-symptom KG lookup failed: {e}")
+                        # Fallback to individual symptom search
+                        aggregated = []
+                        seen = set()
+                        for s in symptoms:
+                            try:
+                                triples = self.kg.retrieve_triples(s) or []
+                                for tup in triples:
+                                    key = tuple(map(str, tup))
+                                    if key not in seen:
+                                        seen.add(key)
+                                        aggregated.append(tup)
+                            except Exception as e:
+                                print(f"[nurse_node] KG lookup failed for '{s}': {e}")
+                        kg_triples = aggregated
+                else:
+                    # Single symptom - use original method
+                    try:
+                        kg_triples = self.kg.retrieve_triples(symptom_query) or []
+                        print(f"[nurse_node] Using single-symptom search for: {symptom_query}")
+                    except Exception as e:
+                        print(f"[nurse_node] Single-symptom KG lookup failed for '{symptom_query}': {e}")
+            print(f"[nurse_node] symptom='{symptom_query}' KG triples returned={len(kg_triples)}")
+            if kg_triples:
+                kg_payload = json.dumps({
+                    "source": "nurse",
+                    "symptom": symptom_query,
+                    "triples": kg_triples
+                }, ensure_ascii=False)
+                updated = updated + [AIMessage(content=f"[nurse_kg] {kg_payload}")]
+        except Exception:
+            # Non-fatal: continue without KG attachment
+            import traceback
+            print("[nurse_node] Unexpected error during KG lookup:\n" + traceback.format_exc())
+
         return {
             "messages": normalize_messages(updated),
             "slots": resp.get("slots", state.slots)
@@ -155,7 +209,7 @@ class Orchestrator:
         return {"messages": normalize_messages(updated)}
 
     async def reasoner_node(self, state: OrchestratorState) -> Dict[str, Any]:
-        fused = await self.reasoner.reason(state.messages)
+        fused = await self.reasoner.reason(state.messages, state.slots or {})
         updated = state.messages + [AIMessage(content=f"[reasoner] {fused}")]
         return {"messages": normalize_messages(updated)}
 

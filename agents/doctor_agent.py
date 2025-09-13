@@ -33,8 +33,20 @@ class DoctorAgent(BaseAgent):
         print(slots.values())
         print("Search", search_q)
         print("Query",query)
-        # Retrieve in parallel
-        kg_triples = self.kg.retrieve_triples(search_q, limit=20)
+        
+        # Check if we have multiple comma-separated symptoms
+        symptoms = [s.strip() for s in str(search_q).split(",") if s.strip()]
+        
+        # Retrieve in parallel - use different methods based on symptom count
+        if len(symptoms) > 1:
+            # Use the new method for multiple symptoms - find diseases with ALL symptoms
+            kg_triples = self.kg.retrieve_diseases_with_all_symptoms(symptoms, limit=100)
+            print(f"[Doctor] Using multi-symptom search for: {symptoms}")
+        else:
+            # Use original method for single symptom or general search
+            kg_triples = self.kg.retrieve_triples(search_q, limit=20)
+            print(f"[Doctor] Using single-symptom search for: {search_q}")
+        
         vdb_hits = self.vdb.query(search_q, top_k=8)
         vdb_evs = self.assembler.from_vdb(vdb_hits)
         kg_evs = self.assembler.from_kg(kg_triples)
