@@ -3,6 +3,7 @@
 from typing import List, Dict, Any
 from services.llm_adapter import LLMAdapter
 from services.slot_extractor import REQUIRED_SLOTS
+from services.kg_service import KGService
 import json
 
 class ReasonerAgent:
@@ -36,49 +37,78 @@ class ReasonerAgent:
                     except Exception:
                         continue
 
+            # Build disease->symptoms map from kg_payloads if present
+            disease_to_symptoms: Dict[str, List[str]] = {}
+            if kg_payloads:
+                all_triples = []
+                for payload in kg_payloads:
+                    triples = payload.get("triples") or []
+                    if isinstance(triples, list):
+                        for item in triples:
+                            if isinstance(item, (list, tuple)) and len(item) == 3:
+                                all_triples.append((str(item[0]), str(item[1]), str(item[2])))
+                kg = KGService()
+                try:
+                    disease_to_symptoms = kg.get_all_symptoms_for_diseases_from_triples(all_triples)
+                finally:
+                    kg.close()
+
             # 1) If all required slots are filled, produce probable diseases with symptoms
             all_filled = all(bool(slots.get(k)) for k in REQUIRED_SLOTS)
             if all_filled:
                 # Prefer KG when available; otherwise use LLM knowledge
-                if kg_payloads:
+                if disease_to_symptoms:
                     system = (
                         "You are a clinical reasoning assistant. Use the provided knowledge graph "
-                        "triples (disease–symptom edges) and the completed patient slots to infer the "
+                        "disease-to-symptoms mapping and the completed patient slots to infer the "
                         "most probable diseases. Return a concise ranked list where each item contains: "
                         "Disease name and a short list of hallmark symptoms from the KG that match."
                     )
                     user = json.dumps({
                         "completed_slots": slots,
-                        "kg": kg_payloads,
+                        "kg": disease_to_symptoms,
                     }, ensure_ascii=False)
                     return await self.llm.simple(system, f"Context:\n{user}\nReturn the ranked list:")
                 else:
+                    print("HIIIII")
                     system = (
-                        "You are a clinical reasoning assistant. Based on the completed triage slots, "
-                        "list the most probable diseases and include their hallmark symptoms. Be concise."
+                        "Just tell the user that the data recieved hasnt matched any disease in a neat way"
                     )
                     return await self.llm.simple(system, json.dumps(slots, ensure_ascii=False))
 
-            # 2) If slots are incomplete and we have KG data, ask one discriminative question
-            if kg_payloads:
+            # 2) If slots are incomplete and we have KG data, ask a discriminative question
+            #    and additional questions to fill any missing REQUIRED_SLOTS
+            # try:
+            #     print("[KG payloads]", json.dumps(kg_payloads, ensure_ascii=False, indent=2))
+            # except Exception:
+            #     print("[KG payloads]", kg_payloads)
+            if disease_to_symptoms:
+                missing_slots = [k for k in REQUIRED_SLOTS if not slots.get(k)]
                 system_prompt = (
                     "You are a clinical reasoning assistant. Using the provided knowledge graph "
-                    "triples (disease–symptom relations) and the user's currently reported symptoms, "
-                    "generate ONE short, specific discriminative question that helps decide between the "
-                    "most likely diseases. Choose a symptom or feature that is present in one strong candidate "
-                    "disease but absent in competing candidates. The question must be:\n"
-                    "- One sentence\n"
+                    "disease-to-symptoms mapping and the user's currently reported symptoms, do two things:\n"
+                    "1) Generate ONE short, specific discriminative question to decide between the top candidate diseases.\n"
+                    "2) Generate concise slot-filling questions for EACH missing slot listed.\n"
+                    "Formatting rules:\n"
+                    "- Output multiple questions, each on its own line\n"
+                    "- First line MUST be the discriminative question\n"
                     "- Second person (e.g., 'Do you have…?')\n"
                     "- Plain English, clinically accurate\n"
-                    "- No preamble, no explanation, no lists, no extra text\n"
+                    "- No preamble or explanations\n"
                 )
+                try:
+                    print("[Disease→Symptoms]", json.dumps(disease_to_symptoms, ensure_ascii=False, indent=2))
+                    print("Number of diseases:",len(disease_to_symptoms))
+                except Exception:
+                    print("[Disease→Symptoms]", disease_to_symptoms)
                 user_payload = {
                     "reported_symptoms": slots.get("symptom"),
-                    "kg": kg_payloads,
+                    "kg": disease_to_symptoms,
+                    "missing_slots": missing_slots,
                 }
                 user_prompt = (
                     "Data:\n" + json.dumps(user_payload, ensure_ascii=False) + "\n\n"
-                    "Return ONLY the question text."
+                    "Return ONLY the questions, one per line."
                 )
                 question = await self.llm.simple(system_prompt, user_prompt)
                 return str(question).strip()

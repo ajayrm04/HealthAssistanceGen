@@ -5,7 +5,7 @@ import re, json
 from pathlib import Path
 from services.phi_utils import detect_phi, redact_phi
 
-ESCALATION_LOG = Path("data/escalations.log")
+ESCALATION_LOG = Path("data\sessions\escalations.log")
 ESCALATION_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 # Basic policy rules - extend these in production

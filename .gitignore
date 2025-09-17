@@ -46,3 +46,6 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# Explicitly ignore services bytecode cache
+services/__pycache__/

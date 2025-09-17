@@ -220,10 +220,8 @@ class Orchestrator:
             "thread_id": state.thread_id,
             "query": state.user_query,   # ✅ use user_query, not slots.get()
         })
-        if result["type"] == "approved":
-            final = result["final"]
-        else:  # escalated
-            final = f"⚠️ Escalated: {', '.join(result.get('issues', []))}"
+        
+        final = result["final"]
 
         updated = state.messages + [("compliance", final)]
         return {"messages": normalize_messages(updated), "final_response": final}

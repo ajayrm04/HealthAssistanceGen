@@ -1,5 +1,5 @@
 # services/kg_service.py
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Set
 from neo4j import GraphDatabase, basic_auth
 import yaml
 import os
@@ -194,3 +194,81 @@ class KGService:
         except Exception as e:
             print(f"[KG] retrieve_diseases_with_all_symptoms error for symptoms={symptoms}: {e}")
             return []
+
+    def get_all_symptoms_for_diseases_from_triples(self, kg_triples: List[Tuple[str, str, str]]) -> Dict[str, List[str]]:
+        """
+        Given a list of knowledge graph triples (s, p, o), extract disease names and
+        return all symptoms connected via the IS_SYMPTOM relationship for each disease.
+
+        Extraction heuristic:
+        - Prefer subjects from triples where predicate equals "IS_SYMPTOM" (case-insensitive)
+        - If none found, use all unique subjects and objects as candidates and let the DB filter by :Disease label
+
+        Returns a mapping: disease_name -> [symptom_name, ...]
+        """
+        if not kg_triples:
+            return {}
+
+        # Step 1: extract candidate disease names from triples
+        disease_candidates: Set[str] = set()
+        for s, p, o in kg_triples:
+            try:
+                predicate = (p or "").strip().upper()
+                if predicate == "IS_SYMPTOM":
+                    if isinstance(s, str) and s.strip():
+                        disease_candidates.add(s.strip())
+            except Exception:
+                continue
+
+        # Fallback: if none found via IS_SYMPTOM, consider all nodes and let DB filter by :Disease
+        if not disease_candidates:
+            for s, p, o in kg_triples:
+                if isinstance(s, str) and s.strip():
+                    disease_candidates.add(s.strip())
+                if isinstance(o, str) and o.strip():
+                    disease_candidates.add(o.strip())
+
+        if not disease_candidates:
+            return {}
+
+        # Normalize to lowercase for matching, but preserve original via map
+        lower_to_original: Dict[str, str] = {name.lower(): name for name in disease_candidates}
+        disease_names_lower = list(lower_to_original.keys())
+
+        result: Dict[str, List[str]] = {}
+        try:
+            with self.driver.session() as session:
+                # Primary: opinionated medical schema
+                cypher_primary = """
+                MATCH (d:Disease)
+                WHERE toLower(d.name) IN $diseases
+                OPTIONAL MATCH (d)-[:IS_SYMPTOM]->(s:Symptom)
+                RETURN d.name AS disease, collect(DISTINCT s.name) AS symptoms
+                """
+                rows = list(session.run(cypher_primary, diseases=disease_names_lower))
+
+                if not rows:
+                    # Fallback: generic schema, filter on relationship type IS_SYMPTOM where possible
+                    cypher_fallback = """
+                    MATCH (d)
+                    WHERE d.name IS NOT NULL AND toLower(d.name) IN $diseases
+                    OPTIONAL MATCH (d)-[r]->(s)
+                    WHERE type(r) = 'IS_SYMPTOM' AND s.name IS NOT NULL
+                    RETURN d.name AS disease, collect(DISTINCT s.name) AS symptoms
+                    """
+                    rows = list(session.run(cypher_fallback, diseases=disease_names_lower))
+
+                for r in rows:
+                    try:
+                        disease = str(r.get("disease")) if r.get("disease") is not None else None
+                        symptoms_list = r.get("symptoms") or []
+                        clean_symptoms = [str(s) for s in symptoms_list if s]
+                        if disease:
+                            result[disease] = sorted(set(clean_symptoms))
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"[KG] get_all_symptoms_for_diseases_from_triples error: {e}")
+            return {}
+
+        return result
