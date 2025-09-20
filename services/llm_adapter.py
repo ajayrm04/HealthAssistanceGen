@@ -25,13 +25,18 @@ class LLMAdapter:
         self.max_tokens = max_tokens or llm_conf.get("max_tokens", 512)
         # instantiate provider-specific chat model
         if PROVIDER == "openai":
-            api_key=OPENAI_API_KEY
+            # Try to get API key from config first, then environment variable
+            api_key = llm_conf.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
             if not api_key:
-                raise RuntimeError("OPENAI_API_KEY required for OpenAI provider")
+                raise RuntimeError("OpenAI API key required. Set 'openai_api_key' in config.yaml or OPENAI_API_KEY environment variable")
             # langchain_openai.ChatOpenAI accepts api_key and model
             self.client = ChatModel(model=model, temperature=temp, api_key=api_key)
+        elif PROVIDER == "ollama":
+            # Get Ollama base URL from config or use default
+            base_url = llm_conf.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            self.client = ChatModel(model=model, temperature=temp, base_url=base_url)
         else:
-            # ChatOllama or ChatAnthropic accept model & temperature
+            # ChatAnthropic or other providers accept model & temperature
             self.client = ChatModel(model=model, temperature=temp)
 
     async def agenerate(self, messages: List[Dict[str, str]]) -> str:

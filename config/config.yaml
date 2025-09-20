@@ -43,6 +43,9 @@ llm:
   doctor_model_key: "gpt-4o"
   researcher_model_key: "gpt-4o"
   reasoner_model_key: "gpt-4o"
+  # API Keys - Set your API keys here or use environment variables
+  openai_api_key: "your_openai_api_key_here"  # Replace with your actual OpenAI API key
+  # ollama_base_url: "http://localhost:11434"  # Uncomment if using Ollama
   
 
 streamlit:
