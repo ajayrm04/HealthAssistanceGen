@@ -2,13 +2,10 @@
 import yaml, os
 from typing import List, Dict, Any, Optional
 
-
-
 base_dir = os.path.dirname(os.path.abspath(__file__))
 config_path = os.path.join(base_dir, "..","config", "config.yaml")
 cfg = yaml.safe_load(open(config_path,"r",encoding="utf-8"))
 PROVIDER = cfg["llm"]["provider"].lower()
-
 
 # Import provider adapters lazily
 if PROVIDER == "ollama":
@@ -28,6 +25,7 @@ class LLMAdapter:
         self.max_tokens = max_tokens or llm_conf.get("max_tokens", 512)
         # instantiate provider-specific chat model
         if PROVIDER == "openai":
+            OPENAI_API_KEY="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"
             api_key=OPENAI_API_KEY
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY required for OpenAI provider")
