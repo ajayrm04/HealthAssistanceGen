@@ -28,7 +28,7 @@ class LLMAdapter:
             # Try to get API key from config first, then environment variable
             api_key = llm_conf.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
             if not api_key:
-                raise RuntimeError("OpenAI API key required. Set 'openai_api_key' in config.yaml or OPENAI_API_KEY environment variable")
+                raise RuntimeError("api key required. Set 'openai_api_key' in config.yaml or OPENAI_API_KEY environment variable")
             # langchain_openai.ChatOpenAI accepts api_key and model
             self.client = ChatModel(model=model, temperature=temp, api_key=api_key)
         elif PROVIDER == "ollama":
