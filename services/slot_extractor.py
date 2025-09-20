@@ -9,127 +9,7 @@ CFG = yaml.safe_load(open(config_path,"r",encoding="utf-8"))
 REQUIRED_SLOTS = CFG.get("slots", {}).get("required", ["symptom","duration","severity","medical_history","medications","allergies"])
 
 # ---------------- Rule-based helpers (fast, robust) ----------------
-COMMON_SYMPTOMS: List[str] = [
-    "headache","fever","cough","chest pain","shortness of breath","sob","nausea",
-    "vomiting","diarrhea","dizziness","fatigue","sore throat","back pain","rash",
-    "abdominal pain","stomach ache","runny nose","congestion","chills","body ache"
-]
-SYMPTOM_PATTERNS = [
-    r"\b(i have|i'm having|i am having|i feel|i'm feeling|i am feeling|experiencing|with)\s+([a-z\s-]+?)\b(?:for|since|and|but|\.|,|$)",
-]
 
-DURATION_PATTERNS = [
-    r"\bfor\s+(?:about\s+)?(\d+\s*(?:minutes?|hours?|days?|weeks?|months?|years?))\b",
-    r"\b(\d+\s*(?:minutes?|hours?|days?|weeks?|months?|years?))\b",
-    r"\bsince\s+(yesterday|today|last night|last week|last month)\b",
-    r"\bfor\s+(a\s+few|a\s+couple\s+of)\s+(days?|weeks?|months?)\b",
-]
-
-SEVERITY_PATTERNS = [
-    r"\b(mild|moderate|severe|worst)\b",
-    r"\b(\d+)\s*/\s*10\b",
-    r"\b(severity|pain)\s*(\d+)\b",
-]
-
-ALLERGY_PATTERN = r"\ballergic\s+to\s+([a-zA-Z0-9 ,-/]+)"
-MEDICATION_PATTERNS = [
-    r"\b(taking|on|started|start|took)\s+([a-zA-Z0-9 ,-/]+)\b",
-]
-
-COMMON_MEDICATIONS: List[str] = [
-    "aspirin","ibuprofen","paracetamol","acetaminophen","metformin","amoxicillin",
-    "atorvastatin","lisinopril","omeprazole","insulin","albuterol","prednisone"
-]
-
-COMMON_CONDITIONS: List[str] = [
-    "hypertension","high blood pressure","diabetes","asthma","copd","coronary artery disease",
-    "heart failure","stroke","cancer","kidney disease","liver disease","thyroid disorder",
-    "depression","anxiety","high cholesterol","hyperlipidemia"
-]
-
-def _match_first(patterns: List[str], text: str) -> Optional[str]:
-    for pat in patterns:
-        m = re.search(pat, text, flags=re.IGNORECASE)
-        if m:
-            # pick last group with content
-            groups = [g for g in m.groups() if g]
-            if groups:
-                return groups[-1].strip()
-            return m.group(0).strip()
-    return None
-
-def _extract_symptom(text: str) -> Optional[str]:
-    # Try explicit patterns like "I have X" first
-    m = _match_first(SYMPTOM_PATTERNS, text)
-    if m:
-        return m
-    # Otherwise scan for common symptom keywords
-    for sym in COMMON_SYMPTOMS:
-        if re.search(rf"\b{re.escape(sym)}\b", text, flags=re.IGNORECASE):
-            return sym
-    return None
-
-def _extract_duration(text: str) -> Optional[str]:
-    m = _match_first(DURATION_PATTERNS, text)
-    return m
-
-def _extract_severity(text: str) -> Optional[str]:
-    # e.g., "pain 7/10" or words
-    m = _match_first(SEVERITY_PATTERNS, text)
-    return m
-
-def _extract_allergies(text: str) -> Optional[str]:
-    m = re.search(ALLERGY_PATTERN, text, flags=re.IGNORECASE)
-    if m:
-        val = m.group(1).strip().strip('.')
-        # cleanup trailing noise
-        val = re.sub(r"\b(and|but|for|since)\b.*$", "", val, flags=re.IGNORECASE).strip(', ').strip()
-        return val or None
-    return None
-
-def _extract_medications(text: str) -> Optional[str]:
-    # Look for explicit phrasing first
-    for pat in MEDICATION_PATTERNS:
-        m = re.search(pat, text, flags=re.IGNORECASE)
-        if m:
-            candidate = m.group(2).strip().strip('.')
-            candidate = re.sub(r"\b(and|but|for|since)\b.*$", "", candidate, flags=re.IGNORECASE).strip(', ').strip()
-            if candidate:
-                return candidate
-    # Otherwise, search for known meds mentioned in text and join
-    hits = []
-    for med in COMMON_MEDICATIONS:
-        if re.search(rf"\b{re.escape(med)}\b", text, flags=re.IGNORECASE):
-            hits.append(med)
-    if hits:
-        return ", ".join(sorted(set(hits)))
-    return None
-
-def _extract_med_history(text: str) -> Optional[str]:
-    # Look for "history of X"
-    m = re.search(r"history of ([a-zA-Z0-9 ,-/]+)", text, flags=re.IGNORECASE)
-    if m:
-        val = m.group(1).strip().strip('.')
-        val = re.sub(r"\b(and|but|for|since)\b.*$", "", val, flags=re.IGNORECASE).strip(', ').strip()
-        return val or None
-    # Otherwise scan for known conditions as list
-    hits = []
-    for cond in COMMON_CONDITIONS:
-        if re.search(rf"\b{re.escape(cond)}\b", text, flags=re.IGNORECASE):
-            hits.append(cond)
-    if hits:
-        return ", ".join(sorted(set(hits)))
-    return None
-
-def _rule_extract(text: str) -> Dict[str, Any]:
-    return {
-        "symptom": _extract_symptom(text),
-        "duration": _extract_duration(text),
-        "severity": _extract_severity(text),
-        "medical_history": _extract_med_history(text),
-        "medications": _extract_medications(text),
-        "allergies": _extract_allergies(text),
-    }
 
 
 class SlotExtractor:
@@ -144,12 +24,21 @@ class SlotExtractor:
 
     async def extract_slots(self, text: str) -> Dict[str, Any]:
         """
-        LLM-only extraction: ask the model to return a strict JSON object with
-        the required keys. If the model output cannot be parsed, return all keys with null.
+        LLM-only extraction: return a strict JSON object with REQUIRED_SLOTS plus
+        an extra key "negated_symptoms" (array of strings). The "symptom" field
+        MUST NOT include any negated items. If parsing fails, return REQUIRED_SLOTS
+        as null and negated_symptoms as [].
         """
+        keys_with_neg = REQUIRED_SLOTS + ["negated_symptoms"]
         system = (
             "You are a strict JSON slot extractor. Return ONLY a valid JSON object with exactly "
-            f"these keys: {REQUIRED_SLOTS}. Values should be strings or null if unknown. No extra text."
+            f"these keys: {keys_with_neg}. Rules:\n"
+            "- Values for required slots should be strings or null if unknown.\n"
+            "- negated_symptoms MUST be an array of strings.\n"
+            "- Identify symptoms the user explicitly denies (e.g., 'no chest pain',\n"
+            "  'I don't have cold', 'denies fever') and list them in negated_symptoms.\n"
+            "- Ensure 'symptom' DOES NOT include any item that appears in negated_symptoms.\n"
+            "No extra text."
         )
         user = (
             "Extract the following patient information from the text.\n" \
@@ -160,7 +49,8 @@ class SlotExtractor:
             "  \"severity\": null,\n"
             "  \"medical_history\": null,\n"
             "  \"medications\": null,\n"
-            "  \"allergies\": null\n"
+            "  \"allergies\": null,\n"
+            "  \"negated_symptoms\": [\"chest pain\", \"fever\"]\n"
             "}"
         )
 
@@ -173,17 +63,35 @@ class SlotExtractor:
             if start != -1 and end != -1 and end > start:
                 text_resp = text_resp[start:end+1]
             data = json.loads(text_resp)
-            return {k: data.get(k, None) for k in REQUIRED_SLOTS}
+            out: Dict[str, Any] = {k: data.get(k, None) for k in REQUIRED_SLOTS}
+            ns = data.get("negated_symptoms")
+            if isinstance(ns, list):
+                out["negated_symptoms"] = [str(x).strip() for x in ns if str(x).strip()]
+            else:
+                out["negated_symptoms"] = []
+            return out
         except Exception:
             # As a last resort, try eval in a constrained way
             try:
                 data = eval(text_resp)
                 if isinstance(data, dict):
-                    return {k: data.get(k, None) for k in REQUIRED_SLOTS}
+                    out: Dict[str, Any] = {k: data.get(k, None) for k in REQUIRED_SLOTS}
+                    ns = data.get("negated_symptoms")
+                    if isinstance(ns, list):
+                        out["negated_symptoms"] = [str(x).strip() for x in ns if str(x).strip()]
+                    else:
+                        out["negated_symptoms"] = []
+                    return out
             except Exception:
                 pass
-        return {k: None for k in REQUIRED_SLOTS}
+        out: Dict[str, Any] = {k: None for k in REQUIRED_SLOTS}
+        out["negated_symptoms"] = []
+        return out
 
+
+
+
+## NOT BEING USED THO
     async def next_question(self, collected: Dict[str, Any], context: Optional[str] = "") -> str:
         """
         Use LLM to generate the next best question in a natural conversational style.

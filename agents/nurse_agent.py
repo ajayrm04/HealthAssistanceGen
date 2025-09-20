@@ -43,10 +43,26 @@ class NurseAgent(BaseAgent):
                     data = json.load(f)
                     if isinstance(data, dict):
                         prior_file = {k: data.get(k) for k in REQUIRED_SLOTS}
+                        # also load negated_symptoms if present on disk
+                        if isinstance(data.get("negated_symptoms"), list):
+                            prior_file["negated_symptoms"] = data.get("negated_symptoms")
         except Exception:
             prior_file = {}
         prior = {k: (prior_state.get(k) if prior_state.get(k) is not None else prior_file.get(k)) for k in REQUIRED_SLOTS}
         collected = {k: prior.get(k, None) for k in REQUIRED_SLOTS}
+        # ensure negated_symptoms exists and merge with any provided
+        existing_neg = prior_state.get("negated_symptoms") if isinstance(prior_state.get("negated_symptoms"), list) else None
+        file_neg = prior_file.get("negated_symptoms") if isinstance(prior_file.get("negated_symptoms"), list) else None
+        merged_neg = []
+        seen = set()
+        for arr in (existing_neg or [] , file_neg or []):
+            for item in arr:
+                s = str(item).strip()
+                low = s.lower()
+                if s and low not in seen:
+                    seen.add(low)
+                    merged_neg.append(s)
+        collected["negated_symptoms"] = merged_neg
 
         # Extract from latest user utterance (rule-based + LLM merge inside extractor)
         new = await self.extractor.extract_slots(text)
@@ -73,6 +89,20 @@ class NurseAgent(BaseAgent):
                             seen.add(low)
                             merged.append(s)
                     collected[k] = ", ".join(merged)
+            elif k == "negated_symptoms":
+                # merge as unique list (case-insensitive)
+                prev_list = collected.get("negated_symptoms") or []
+                merged = []
+                seen = set()
+                for s in list(prev_list) + list(v if isinstance(v, list) else []):
+                    s_str = str(s).strip()
+                    if not s_str:
+                        continue
+                    low = s_str.lower()
+                    if low not in seen:
+                        seen.add(low)
+                        merged.append(s_str)
+                collected["negated_symptoms"] = merged
             else:
                 collected[k] = v
 
@@ -82,6 +112,7 @@ class NurseAgent(BaseAgent):
         # Persist to JSON on every turn for durability and debugging
         try:
             to_save = {k: collected.get(k) for k in REQUIRED_SLOTS}
+            to_save["negated_symptoms"] = collected.get("negated_symptoms", [])
             # Optional field aliases to match user-readable preferences
             # e.g., singular/plural variations kept in sync
             to_save_aliases = {
@@ -93,6 +124,7 @@ class NurseAgent(BaseAgent):
                 "medications": to_save.get("medications"),
                 "allergy": to_save.get("allergies"),
                 "allergies": to_save.get("allergies"),
+                "negated_symptoms": to_save.get("negated_symptoms", []),
             }
             with open(slot_path, "w", encoding="utf-8") as f:
                 json.dump(to_save_aliases, f, ensure_ascii=False, indent=2)

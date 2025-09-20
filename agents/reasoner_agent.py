@@ -62,19 +62,27 @@ class ReasonerAgent:
                         "You are a clinical reasoning assistant. Use the provided knowledge graph "
                         "disease-to-symptoms mapping and the completed patient slots to infer the "
                         "most probable diseases. Return a concise ranked list where each item contains: "
-                        "Disease name and a short list of hallmark symptoms from the KG that match."
+                        "Disease name and a short list of hallmark symptoms from the KG that match.\n"
+                        "HARD CONSTRAINTS:\n"
+                        "- Treat items in slots.negated_symptoms as explicitly ABSENT.\n"
+                        "- Exclude any disease whose hallmark symptoms include any negated symptom."
                     )
                     user = json.dumps({
                         "completed_slots": slots,
                         "kg": disease_to_symptoms,
+                        "negated_symptoms": slots.get("negated_symptoms", []),
                     }, ensure_ascii=False)
                     return await self.llm.simple(system, f"Context:\n{user}\nReturn the ranked list:")
                 else:
-                    print("HIIIII")
+                    # No KG available: still ask LLM for probable diseases but enforce negation constraints
                     system = (
-                        "Just tell the user that the data recieved hasnt matched any disease in a neat way"
+                        "Just tell the user that not much informartion is present from our data in a neat way "
                     )
-                    return await self.llm.simple(system, json.dumps(slots, ensure_ascii=False))
+                    user_payload = {
+                        "completed_slots": slots,
+                        "negated_symptoms": slots.get("negated_symptoms", []),
+                    }
+                    return await self.llm.simple(system, f"Context:\n{json.dumps(user_payload, ensure_ascii=False)}\nReturn the ranked list:")
 
             # 2) If slots are incomplete and we have KG data, ask a discriminative question
             #    and additional questions to fill any missing REQUIRED_SLOTS
@@ -89,6 +97,7 @@ class ReasonerAgent:
                     "disease-to-symptoms mapping and the user's currently reported symptoms, do two things:\n"
                     "1) Generate ONE short, specific discriminative question to decide between the top candidate diseases.\n"
                     "2) Generate concise slot-filling questions for EACH missing slot listed.\n"
+                    "Constraints: Never ask about any symptom that appears in negated_symptoms (they are explicitly absent).\n"
                     "Formatting rules:\n"
                     "- Output multiple questions, each on its own line\n"
                     "- First line MUST be the discriminative question\n"
@@ -105,6 +114,7 @@ class ReasonerAgent:
                     "reported_symptoms": slots.get("symptom"),
                     "kg": disease_to_symptoms,
                     "missing_slots": missing_slots,
+                    "negated_symptoms": slots.get("negated_symptoms", []),
                 }
                 user_prompt = (
                     "Data:\n" + json.dumps(user_payload, ensure_ascii=False) + "\n\n"
